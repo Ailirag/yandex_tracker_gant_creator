@@ -198,3 +198,6 @@ class Settings:
     exclude_in_progress: bool = False    # убрать «в работе» (В разработке, Устранение замечаний)
     exclude_tail: bool = False           # убрать «на стадии завершения» (тест/ревью/релиз)
     exclude_statuses: set[str] = field(default_factory=set)  # произвольные статусы по display-имени
+    # Команды, у которых ни одной группы нет в источнике ёмкости, полностью
+    # исключаются из расстановки (иначе их задачи висли бы с «не хватило»).
+    exclude_teams_without_capacity: bool = True

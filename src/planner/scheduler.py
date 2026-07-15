@@ -91,6 +91,12 @@ def _team_of(issue: Issue) -> tuple[Team | None, bool]:
     return None, False
 
 
+def _team_has_capacity(team: Team, ledger: CapacityLedger) -> bool:
+    """Есть ли в источнике ёмкость хотя бы по одной группе команды."""
+    groups = [g for g in (team.sa_group, team.dev_group) if g]
+    return any(ledger.has_group(g) for g in groups)
+
+
 def _systems_of(issue: Issue) -> list[str]:
     rows = []
     for comp in issue.components:
@@ -154,7 +160,15 @@ def build_plan(
         | STATUSES_TAIL_ONLY | STATUSES_NOT_PLANNED | STATUSES_DONE
     )
 
+    # Команды без ресурса в источнике ёмкости — исключаем целиком.
+    empty_teams: set[str] = set()
+    if settings.exclude_teams_without_capacity:
+        for team in settings.teams:
+            if not _team_has_capacity(team, ledger):
+                empty_teams.add(team.id)
+
     done_count = 0
+    excluded_by_team: dict[str, int] = {}
     work_queue: list[Issue] = []
     for issue in issues:
         if issue.status in STATUSES_DONE:
@@ -167,6 +181,14 @@ def build_plan(
             unrecognized[issue.status] = unrecognized.get(issue.status, 0) + 1
             skipped.append(SkippedItem(issue, f"нераспознанный статус «{issue.status}»"))
             continue
+        # Команда без ресурса в выгрузке — задача не расставляется.
+        if empty_teams:
+            team_early, _ = _team_of(issue)
+            if team_early is not None and team_early.id in empty_teams:
+                excluded_by_team[team_early.component] = excluded_by_team.get(team_early.component, 0) + 1
+                skipped.append(SkippedItem(
+                    issue, f"команда «{team_early.component}» без ресурса в выгрузке — исключена"))
+                continue
         # Параметрические исключения (опционально, по умолчанию выключены).
         if issue.status in settings.exclude_statuses:
             skipped.append(SkippedItem(issue, f"исключён параметром --exclude-status «{issue.status}»"))
@@ -274,6 +296,9 @@ def build_plan(
         item.new_end = item.buffer_end
         item.new_pdz = item.release_date
         planned.append(item)
+
+    for component, count in sorted(excluded_by_team.items()):
+        warnings.append(f"Команда «{component}» без ресурса в выгрузке — исключено задач: {count}")
 
     return PlanResult(
         planned=planned,

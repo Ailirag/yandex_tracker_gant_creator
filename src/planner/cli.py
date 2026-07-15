@@ -75,6 +75,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         exclude_in_progress=args.exclude_in_progress,
         exclude_tail=args.exclude_tail,
         exclude_statuses=exclude_statuses,
+        exclude_teams_without_capacity=not args.keep_empty_teams,
     )
     print(f"Дата начала планирования: {plan_start.isoformat()}")
     print(f"Запрос к Трекеру: {args.query}")
@@ -284,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="исключить задачи на стадии завершения (тест/ревью/релиз)")
     p_plan.add_argument("--exclude-status",
                         help='исключить произвольные статусы по имени: "Пауза,Отложено"')
+    p_plan.add_argument("--keep-empty-teams", action="store_true",
+                        help="НЕ исключать команды, для которых нет ресурса в источнике ёмкости")
     p_plan.add_argument("--capacity", choices=("mock", "onec", "file"), default="mock",
                         help="источник ёмкости: mock (по умолчанию), file (выгрузка 1С), onec (HTTP-сервис)")
     p_plan.add_argument("--capacity-file", help="путь к выгрузке 1С (для --capacity file)")

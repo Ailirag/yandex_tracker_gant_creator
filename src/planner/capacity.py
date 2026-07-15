@@ -323,6 +323,11 @@ class CapacityLedger:
         self._source = source
         self._used: dict[tuple[str, date], float] = {}
 
+    def has_group(self, group: str) -> bool:
+        """Есть ли у источника данные по группе (с нормализацией имени)."""
+        norm = _norm_group(group)
+        return any(_norm_group(g) == norm for g in self._source.known_groups())
+
     def available(self, group: str, day: date) -> float:
         base = self._source.fte(group, day)
         return max(0.0, base - self._used.get((group, day), 0.0))
