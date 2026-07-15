@@ -1,9 +1,10 @@
 """Источники ёмкости (FTE по дням) для групп «роль × направление».
 
-Два источника:
-- OneCHttpCapacity — боевой: HTTP-сервис 1С отдаёт остатки РН
-  «ДоступностьРесурса» по группам (резервы и отпуска уже учтены документами);
-- MockCapacity — до появления сервиса: численность групп из
+Источники:
+- FileCapacity — выгрузка из 1С (запрос onec/Запрос_ГрафикДоступности.txt):
+  реальная доступность с учётом отпусков; рекомендуемый источник;
+- OneCHttpCapacity — боевой: HTTP-сервис 1С отдаёт те же остатки онлайн;
+- MockCapacity — до появления данных: численность групп из
   «Сотрудники в иерархии.xlsx» × коэффициент резерва × рабочие дни.
 
 Контракт: capacity(group, day) -> FTE (float >= 0). Планировщик сам
@@ -12,8 +13,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from typing import Protocol
 
 import httpx
@@ -145,6 +148,170 @@ class OneCHttpCapacity:
 
     def describe(self) -> str:
         return f"HTTP-сервис 1С: {self.base_url} (остатки РН ДоступностьРесурса)"
+
+
+# --- Выгрузка из 1С (файл) -----------------------------------------------
+
+def _norm_group(name: str) -> str:
+    return name.replace("(1С)", "").replace(" ", "").lower()
+
+
+def _coerce_date(value) -> date | None:
+    if value is None or isinstance(value, str) and value.startswith("<"):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    for parse in (
+        lambda x: date.fromisoformat(x[:10]),
+        lambda x: date(*(int(p) for p in reversed(x.split(".")))),  # ДД.ММ.ГГГГ
+    ):
+        try:
+            return parse(s)
+        except Exception:
+            continue
+    return None
+
+
+@dataclass
+class FileCapacity:
+    """Ёмкость из выгрузки 1С (запрос onec/Запрос_ГрафикДоступности.txt).
+
+    Ожидаемые колонки (по заголовку, регистронезависимо): Группа, Дата,
+    ДоступныйРесурс. Прочие (Роль, Направление) игнорируются. Значения FTE —
+    как есть из 1С (отпуска и производственный календарь уже учтены); резерв
+    на поддержку/fast-track моделируется в 1С отдельными событиями, здесь
+    коэффициенты НЕ применяются.
+    """
+    by_group_day: dict[tuple[str, str], float]
+    groups: set[str]
+    days: int
+    date_min: date | None
+    date_max: date | None
+    source_name: str
+
+    @classmethod
+    def from_file(cls, path) -> "FileCapacity":
+        path = Path(path)
+        if path.suffix.lower() == ".json":
+            rows = cls._rows_from_json(path)
+        elif path.suffix.lower() in (".csv", ".tsv"):
+            rows = cls._rows_from_csv(path)
+        else:
+            rows = cls._rows_from_xlsx(path)
+
+        by_group_day: dict[tuple[str, str], float] = {}
+        groups: set[str] = set()
+        dates: set[date] = set()
+        for group, day, fte in rows:
+            if not group or day is None:
+                continue
+            by_group_day[(_norm_group(group), day.isoformat())] = float(fte or 0.0)
+            groups.add(group.strip())
+            dates.add(day)
+        return cls(
+            by_group_day=by_group_day,
+            groups=groups,
+            days=len(dates),
+            date_min=min(dates) if dates else None,
+            date_max=max(dates) if dates else None,
+            source_name=path.name,
+        )
+
+    @staticmethod
+    def _header_index(header: list[str]) -> dict[str, int]:
+        idx: dict[str, int] = {}
+        for i, cell in enumerate(header):
+            key = str(cell or "").strip().lower()
+            if key.startswith("групп"):
+                idx["group"] = i
+            elif key.startswith("дата"):
+                idx["date"] = i
+            elif key.startswith("доступн") or key == "fte":
+                idx["fte"] = i
+        missing = {"group", "date", "fte"} - set(idx)
+        if missing:
+            raise ValueError(
+                f"В выгрузке не найдены колонки {missing}. "
+                f"Ожидаются: Группа, Дата, ДоступныйРесурс. Заголовок: {header}"
+            )
+        return idx
+
+    @classmethod
+    def _rows_from_xlsx(cls, path: Path):
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb.worksheets[0]
+        all_rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        # заголовок — первая строка, где есть и «Групп…», и «Дата»
+        header_row = 0
+        for r, row in enumerate(all_rows):
+            low = [str(c or "").strip().lower() for c in row]
+            if any(c.startswith("групп") for c in low) and any(c.startswith("дата") for c in low):
+                header_row = r
+                break
+        idx = cls._header_index(list(all_rows[header_row]))
+        for row in all_rows[header_row + 1:]:
+            if row is None or all(c is None for c in row):
+                continue
+            yield (
+                _cell(row, idx["group"]),
+                _coerce_date(_cell(row, idx["date"])),
+                _cell(row, idx["fte"]),
+            )
+
+    @classmethod
+    def _rows_from_csv(cls, path: Path):
+        import csv
+        delim = "\t" if path.suffix.lower() == ".tsv" else ";"
+        text = path.read_text(encoding="utf-8-sig")
+        # автоопределение разделителя: ; или ,
+        if delim == ";" and text.splitlines() and "," in text.splitlines()[0] and ";" not in text.splitlines()[0]:
+            delim = ","
+        reader = list(csv.reader(text.splitlines(), delimiter=delim))
+        idx = cls._header_index(reader[0])
+        for row in reader[1:]:
+            if not row:
+                continue
+            yield (_cell(row, idx["group"]), _coerce_date(_cell(row, idx["date"])),
+                   _fnum(_cell(row, idx["fte"])))
+
+    @classmethod
+    def _rows_from_json(cls, path: Path):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for item in data:
+            g = item.get("Группа") or item.get("group")
+            d = _coerce_date(item.get("Дата") or item.get("date"))
+            f = item.get("ДоступныйРесурс") or item.get("fte") or 0
+            yield (g, d, _fnum(f))
+
+    def fte(self, group: str, day: date) -> float:
+        return self.by_group_day.get((_norm_group(group), day.isoformat()), 0.0)
+
+    def known_groups(self) -> set[str]:
+        return set(self.groups)
+
+    def describe(self) -> str:
+        rng = (f"{self.date_min}..{self.date_max}" if self.date_min else "нет дат")
+        return (
+            f"Выгрузка 1С «{self.source_name}»: групп {len(self.groups)}, "
+            f"дней {self.days} ({rng}); значения как есть (отпуска учтены в 1С)"
+        )
+
+
+def _cell(row, i):
+    return row[i] if i < len(row) else None
+
+
+def _fnum(value) -> float:
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", ".").replace(" ", ""))
+    except ValueError:
+        return 0.0
 
 
 # --- Леджер остатков для раскладки ---------------------------------------

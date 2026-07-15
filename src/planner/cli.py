@@ -18,7 +18,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from .capacity import CapacityLedger, MockCapacity, OneCHttpCapacity
+from .capacity import CapacityLedger, FileCapacity, MockCapacity, OneCHttpCapacity
 from .config import (
     EMPLOYEES_XLSX,
     ENV_FILE,
@@ -95,6 +95,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
             date_from=plan_start,
             date_to=settings.horizon_end,
         )
+    elif args.capacity == "file":
+        if not args.capacity_file:
+            raise SystemExit("--capacity file требует --capacity-file <путь к выгрузке 1С>")
+        source = FileCapacity.from_file(args.capacity_file)
     else:
         source = MockCapacity.from_xlsx(EMPLOYEES_XLSX)
     ledger = CapacityLedger(source)
@@ -280,7 +284,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="исключить задачи на стадии завершения (тест/ревью/релиз)")
     p_plan.add_argument("--exclude-status",
                         help='исключить произвольные статусы по имени: "Пауза,Отложено"')
-    p_plan.add_argument("--capacity", choices=("mock", "onec"), default="mock")
+    p_plan.add_argument("--capacity", choices=("mock", "onec", "file"), default="mock",
+                        help="источник ёмкости: mock (по умолчанию), file (выгрузка 1С), onec (HTTP-сервис)")
+    p_plan.add_argument("--capacity-file", help="путь к выгрузке 1С (для --capacity file)")
     p_plan.add_argument("--onec-url", default="http://localhost/sprinthelper/hs/planner",
                         help="базовый URL HTTP-сервиса 1С (для --capacity onec)")
     p_plan.add_argument("--baseline", help="plan_*.json для сравнения (по умолчанию plan_latest.json)")
