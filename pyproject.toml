@@ -1,0 +1,22 @@
+[project]
+name = "sprint-planner"
+version = "0.1.0"
+description = "Автопланирование задач очереди ONE: расчёт start/end/плановой даты завершения с учётом FTE-ресурса групп и графика релизов"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+planner = "planner.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/planner"]
+
+[tool.uv]
+cache-dir = "D:/tools/uv/cache"
