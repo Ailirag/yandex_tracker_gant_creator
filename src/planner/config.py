@@ -192,3 +192,9 @@ class Settings:
     hours_per_day: float = HOURS_PER_FTE_DAY
     in_progress_first: bool = True       # задачи "В разработке" планируются раньше бэклога
     teams: list[Team] = field(default_factory=lambda: list(TEAMS))
+    # Фильтры-исключения (по умолчанию всё включено — текущее поведение).
+    # Исключённые задачи не планируются И не потребляют ресурс — «чистый»
+    # вид раскладки бэклога от даты plan_start.
+    exclude_in_progress: bool = False    # убрать «в работе» (В разработке, Устранение замечаний)
+    exclude_tail: bool = False           # убрать «на стадии завершения» (тест/ревью/релиз)
+    exclude_statuses: set[str] = field(default_factory=set)  # произвольные статусы по display-имени

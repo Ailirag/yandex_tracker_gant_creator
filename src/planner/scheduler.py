@@ -167,6 +167,16 @@ def build_plan(
             unrecognized[issue.status] = unrecognized.get(issue.status, 0) + 1
             skipped.append(SkippedItem(issue, f"нераспознанный статус «{issue.status}»"))
             continue
+        # Параметрические исключения (опционально, по умолчанию выключены).
+        if issue.status in settings.exclude_statuses:
+            skipped.append(SkippedItem(issue, f"исключён параметром --exclude-status «{issue.status}»"))
+            continue
+        if settings.exclude_in_progress and issue.status in STATUSES_DEV_IN_PROGRESS:
+            skipped.append(SkippedItem(issue, f"исключён (--exclude-in-progress): «{issue.status}»"))
+            continue
+        if settings.exclude_tail and issue.status in STATUSES_TAIL_ONLY:
+            skipped.append(SkippedItem(issue, f"исключён (--exclude-tail): «{issue.status}»"))
+            continue
         # Пустая важность = задача не отобрана в порядок выполнения.
         # Исключения: уже идущая разработка (ресурс реально занят) и хвостовые
         # статусы (ресурс не потребляют, считается только релизное окно).

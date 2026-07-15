@@ -67,7 +67,25 @@ def _parse_what_if(raw: str | None) -> dict[str, int]:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     plan_start = date.fromisoformat(args.start) if args.start else date.today()
-    settings = Settings(plan_start=plan_start)
+    exclude_statuses = {
+        s.strip() for s in (args.exclude_status or "").split(",") if s.strip()
+    }
+    settings = Settings(
+        plan_start=plan_start,
+        exclude_in_progress=args.exclude_in_progress,
+        exclude_tail=args.exclude_tail,
+        exclude_statuses=exclude_statuses,
+    )
+    print(f"Дата начала планирования: {plan_start.isoformat()}")
+    print(f"Запрос к Трекеру: {args.query}")
+    active = []
+    if args.exclude_in_progress:
+        active.append("в работе")
+    if args.exclude_tail:
+        active.append("на стадии завершения")
+    if exclude_statuses:
+        active.append(f"статусы: {', '.join(sorted(exclude_statuses))}")
+    print("Исключения: " + ("; ".join(active) if active else "нет (все статусы включены)"))
 
     releases = parse_release_plan(RELEASE_PLAN_XLSX)
 
@@ -254,7 +272,14 @@ def main(argv: list[str] | None = None) -> int:
 
     p_plan = sub.add_parser("plan", help="рассчитать план (dry-run)")
     p_plan.add_argument("--start", help="дата начала раскладки YYYY-MM-DD (по умолчанию сегодня)")
-    p_plan.add_argument("--query", default=DEFAULT_QUERY, help="запрос к Трекеру")
+    p_plan.add_argument("--query", default=DEFAULT_QUERY,
+                        help=f"запрос к Трекеру (по умолчанию: {DEFAULT_QUERY})")
+    p_plan.add_argument("--exclude-in-progress", action="store_true",
+                        help="исключить задачи в работе (В разработке, Устранение замечаний)")
+    p_plan.add_argument("--exclude-tail", action="store_true",
+                        help="исключить задачи на стадии завершения (тест/ревью/релиз)")
+    p_plan.add_argument("--exclude-status",
+                        help='исключить произвольные статусы по имени: "Пауза,Отложено"')
     p_plan.add_argument("--capacity", choices=("mock", "onec"), default="mock")
     p_plan.add_argument("--onec-url", default="http://localhost/sprinthelper/hs/planner",
                         help="базовый URL HTTP-сервиса 1С (для --capacity onec)")
