@@ -127,11 +127,23 @@ class TrackerClient:
     def close(self) -> None:
         self._client.close()
 
-    def _request_with_retry(self, method: str, url: str, *, max_retries: int = 5, **kwargs) -> httpx.Response:
-        """Запрос с повторами при 429/5xx (Retry-After либо экспоненциальная пауза)."""
+    def _request_with_retry(self, method: str, url: str, *, max_retries: int = 6, **kwargs) -> httpx.Response:
+        """Запрос с повторами при 429/5xx и обрывах транспорта.
+
+        Пауза — Retry-After (для 429) либо экспоненциальный backoff. Сетевые
+        обрывы (RemoteProtocolError, таймауты, разрыв соединения) на длинной
+        пагинации ретраятся так же, иначе один сбой рушит всю выборку.
+        """
         delay = 2.0
         for attempt in range(max_retries + 1):
-            resp = self._client.request(method, url, **kwargs)
+            try:
+                resp = self._client.request(method, url, **kwargs)
+            except httpx.TransportError as exc:
+                if attempt == max_retries:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+                continue
             if resp.status_code not in (429, 500, 502, 503, 504) or attempt == max_retries:
                 resp.raise_for_status()
                 return resp
