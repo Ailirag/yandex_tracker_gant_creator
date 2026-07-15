@@ -54,6 +54,7 @@ class PlanItem:
     order: int = 0                    # позиция в очереди раскладки
     sa: PhasePlan | None = None
     dev: PhasePlan | None = None
+    test_start: date | None = None    # начало тест-буфера (для Ганта)
     buffer_end: date | None = None
     release_date: date | None = None
     release_fallback: bool = False
@@ -265,6 +266,7 @@ def build_plan(
 
         # Тест-буфер: 5 рабочих дней после последней рабочей фазы
         # (для tail-only задач — от даты запуска расчёта).
+        item.test_start = next_workday(cursor)
         item.buffer_end = add_workdays(cursor, settings.test_buffer_workdays - 1)
 
         # Релизное окно: последний из ближайших «Р» всех систем задачи.

@@ -28,6 +28,7 @@ from .config import (
     Settings,
 )
 from .release_plan import parse_release_plan
+from .report_gantt import write_gantt_html
 from .report import (
     console_summary,
     dump_json,
@@ -139,9 +140,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
     xlsx_path = OUT_DIR / f"plan_{stamp}.xlsx"
     json_path = OUT_DIR / f"plan_{stamp}.json"
     backup_path = OUT_DIR / f"backup_{stamp}.json"
+    gantt_path = OUT_DIR / f"gantt_{stamp}.html"
     write_xlsx(result, xlsx_path, source.describe(), shifts=shifts)
     write_plan_json(result, json_path)
     write_backup(result, backup_path)
+    write_gantt_html(result, gantt_path, plan_start, source.describe())
     if what_if:
         print("Режим what-if: план НЕ сохранён как базовый (plan_latest.json не обновлён).")
     else:
@@ -149,6 +152,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     print(console_summary(result, source.describe()))
     print(f"\nОтчёт:  {xlsx_path}")
+    print(f"Гант:   {gantt_path}")
     print(f"План:   {json_path}")
     print(f"Бэкап:  {backup_path}")
     print("\nЭто dry-run: в Трекер ничего не записано. Запись: planner apply --plan <plan.json>")
