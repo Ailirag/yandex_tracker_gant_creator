@@ -27,6 +27,21 @@ uv run planner plan --what-if "ONE-2515=1"
 # (out\plan_latest.json); отключить: --no-baseline, задать явно: --baseline <файл>
 ```
 
+### Конфиг запуска (чтобы не держать параметры в командной строке)
+
+Все параметры `plan` можно вынести в TOML-файл и переиспользовать
+(держать несколько сценариев):
+
+```powershell
+uv run planner plan --config plan.toml                 # всё из конфига
+uv run planner plan --config plan.toml --reserve 0.3   # конфиг + точечное переопределение
+```
+
+Приоритет: **флаг в строке > конфиг > умолчание**. Готовый шаблон с
+комментариями — [`plan.example.toml`](plan.example.toml) (скопируйте под свой
+сценарий, например `plan_finance.toml`). Ключи совпадают с именами флагов
+(`capacity_file`, `reserve`, `sprint_anchor`, `exclude_status = [...]` и т.д.).
+
 ### Отбор задач и дата старта (всё опционально, по умолчанию выключено)
 
 ```powershell

@@ -15,6 +15,7 @@ import argparse
 import json
 import shutil
 import sys
+import tomllib
 from datetime import date, datetime
 from pathlib import Path
 
@@ -54,6 +55,60 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
     return input(prompt).strip().lower() in ("yes", "y", "да")
 
 
+# Значения по умолчанию параметров plan. Приоритет: CLI-флаг > конфиг > это.
+PLAN_DEFAULTS: dict = {
+    "start": None,
+    "query": DEFAULT_QUERY,
+    "exclude_in_progress": False,
+    "exclude_tail": False,
+    "exclude_status": None,
+    "keep_empty_teams": False,
+    "capacity": "mock",
+    "capacity_file": None,
+    "reserve": RESERVE_DEFAULT,
+    "sprint_weeks": 2,
+    "sprint_anchor": None,
+    "onec_url": "http://localhost/sprinthelper/hs/planner",
+    "baseline": None,
+    "no_baseline": False,
+    "what_if": None,
+}
+
+
+def _load_config(path: Path) -> dict:
+    """Читает TOML-конфиг запуска. Параметры — на верхнем уровне либо в [plan]."""
+    if not path.exists():
+        raise SystemExit(f"Конфиг не найден: {path}")
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    cfg = data.get("plan", data)
+    out: dict = {}
+    for k, v in cfg.items():
+        key = k.replace("-", "_")
+        if key == "exclude_status" and isinstance(v, list):
+            v = ",".join(v)
+        out[key] = v
+    return out
+
+
+def _resolve_plan_params(args: argparse.Namespace) -> dict:
+    """Слияние: дефолты <- конфиг <- явные CLI-флаги (argparse.SUPPRESS)."""
+    params = dict(PLAN_DEFAULTS)
+    cfg_path = getattr(args, "config", None)
+    if cfg_path:
+        cfg = _load_config(Path(cfg_path))
+        for k, v in cfg.items():
+            if k in params:
+                params[k] = v
+            else:
+                print(f"config: неизвестный параметр «{k}» — пропущен")
+        print(f"Конфиг: {cfg_path}")
+    for k in params:
+        if hasattr(args, k):          # с SUPPRESS присутствует только если задан в CLI
+            params[k] = getattr(args, k)
+    return params
+
+
 def _parse_what_if(raw: str | None) -> dict[str, int]:
     """--what-if "ONE-123=5,ONE-456=1" -> {"ONE-123": 5, "ONE-456": 1}."""
     overrides: dict[str, int] = {}
@@ -68,6 +123,11 @@ def _parse_what_if(raw: str | None) -> dict[str, int]:
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
+    # Разрешаем параметры из конфига/CLI и кладём обратно на args,
+    # чтобы остальной код читал их привычным образом.
+    for k, v in _resolve_plan_params(args).items():
+        setattr(args, k, v)
+
     plan_start = date.fromisoformat(args.start) if args.start else date.today()
     sprint_anchor = date.fromisoformat(args.sprint_anchor) if args.sprint_anchor else plan_start
     exclude_statuses = {
@@ -286,33 +346,38 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="planner", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # default=SUPPRESS: неуказанный флаг ОТСУТСТВУЕТ в args, поэтому конфиг его
+    # не перетирает (см. _resolve_plan_params). Значения по умолчанию — в PLAN_DEFAULTS.
+    S = argparse.SUPPRESS
     p_plan = sub.add_parser("plan", help="рассчитать план (dry-run)")
-    p_plan.add_argument("--start", help="дата начала раскладки YYYY-MM-DD (по умолчанию сегодня)")
-    p_plan.add_argument("--query", default=DEFAULT_QUERY,
+    p_plan.add_argument("--config", help="TOML-конфиг с параметрами запуска (CLI-флаги переопределяют)")
+    p_plan.add_argument("--start", default=S, help="дата начала раскладки YYYY-MM-DD (по умолчанию сегодня)")
+    p_plan.add_argument("--query", default=S,
                         help=f"запрос к Трекеру (по умолчанию: {DEFAULT_QUERY})")
-    p_plan.add_argument("--exclude-in-progress", action="store_true",
+    p_plan.add_argument("--exclude-in-progress", action="store_true", default=S,
                         help="исключить задачи в работе (В разработке, Устранение замечаний)")
-    p_plan.add_argument("--exclude-tail", action="store_true",
+    p_plan.add_argument("--exclude-tail", action="store_true", default=S,
                         help="исключить задачи на стадии завершения (тест/ревью/релиз)")
-    p_plan.add_argument("--exclude-status",
+    p_plan.add_argument("--exclude-status", default=S,
                         help='исключить произвольные статусы по имени: "Пауза,Отложено"')
-    p_plan.add_argument("--keep-empty-teams", action="store_true",
+    p_plan.add_argument("--keep-empty-teams", action="store_true", default=S,
                         help="НЕ исключать команды, для которых нет ресурса в источнике ёмкости")
-    p_plan.add_argument("--capacity", choices=("mock", "onec", "file"), default="mock",
+    p_plan.add_argument("--capacity", choices=("mock", "onec", "file"), default=S,
                         help="источник ёмкости: mock (по умолчанию), file (выгрузка 1С), onec (HTTP-сервис)")
-    p_plan.add_argument("--capacity-file", help="путь к выгрузке 1С (для --capacity file)")
-    p_plan.add_argument("--reserve", type=float, default=RESERVE_DEFAULT,
+    p_plan.add_argument("--capacity-file", default=S, help="путь к выгрузке 1С (для --capacity file)")
+    p_plan.add_argument("--reserve", type=float, default=S,
                         help="резерв ёмкости под влёты, доля 0..1 или %% (по умолчанию 0.25); "
                              "0 — без резерва (когда заведён событиями в 1С)")
-    p_plan.add_argument("--sprint-weeks", type=int, default=2,
+    p_plan.add_argument("--sprint-weeks", type=int, default=S,
                         help="длина спринта в неделях для сетки на Ганте (по умолчанию 2)")
-    p_plan.add_argument("--sprint-anchor",
+    p_plan.add_argument("--sprint-anchor", default=S,
                         help="дата начала любого спринта YYYY-MM-DD (по умолчанию — дата плана)")
-    p_plan.add_argument("--onec-url", default="http://localhost/sprinthelper/hs/planner",
+    p_plan.add_argument("--onec-url", default=S,
                         help="базовый URL HTTP-сервиса 1С (для --capacity onec)")
-    p_plan.add_argument("--baseline", help="plan_*.json для сравнения (по умолчанию plan_latest.json)")
-    p_plan.add_argument("--no-baseline", action="store_true", help="не сравнивать с прошлым планом")
-    p_plan.add_argument("--what-if", help='виртуальные важности: "ONE-123=5,ONE-456=1" (план не сохраняется как базовый)')
+    p_plan.add_argument("--baseline", default=S, help="plan_*.json для сравнения (по умолчанию plan_latest.json)")
+    p_plan.add_argument("--no-baseline", action="store_true", default=S, help="не сравнивать с прошлым планом")
+    p_plan.add_argument("--what-if", default=S,
+                        help='виртуальные важности: "ONE-123=5,ONE-456=1" (план не сохраняется как базовый)')
     p_plan.set_defaults(func=cmd_plan)
 
     p_backup = sub.add_parser("backup", help="снять снимок текущих дат очереди")
