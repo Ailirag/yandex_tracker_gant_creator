@@ -25,6 +25,7 @@ from .config import (
     OUT_DIR,
     QUEUE,
     RELEASE_PLAN_XLSX,
+    RESERVE_DEFAULT,
     Settings,
 )
 from .release_plan import parse_release_plan
@@ -68,6 +69,7 @@ def _parse_what_if(raw: str | None) -> dict[str, int]:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     plan_start = date.fromisoformat(args.start) if args.start else date.today()
+    sprint_anchor = date.fromisoformat(args.sprint_anchor) if args.sprint_anchor else plan_start
     exclude_statuses = {
         s.strip() for s in (args.exclude_status or "").split(",") if s.strip()
     }
@@ -103,7 +105,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
         source = FileCapacity.from_file(args.capacity_file)
     else:
         source = MockCapacity.from_xlsx(EMPLOYEES_XLSX)
-    ledger = CapacityLedger(source)
+
+    reserve = args.reserve / 100.0 if args.reserve > 1 else args.reserve
+    ledger = CapacityLedger(source, reserve=reserve)
+    capacity_note = f"{source.describe()}; резерв {reserve:.0%}"
+    print(f"Источник ёмкости: {capacity_note}")
 
     client = open_client(ENV_FILE)
     try:
@@ -141,16 +147,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
     json_path = OUT_DIR / f"plan_{stamp}.json"
     backup_path = OUT_DIR / f"backup_{stamp}.json"
     gantt_path = OUT_DIR / f"gantt_{stamp}.html"
-    write_xlsx(result, xlsx_path, source.describe(), shifts=shifts)
+    write_xlsx(result, xlsx_path, capacity_note, shifts=shifts)
     write_plan_json(result, json_path)
     write_backup(result, backup_path)
-    write_gantt_html(result, gantt_path, plan_start, source.describe())
+    write_gantt_html(result, gantt_path, plan_start, capacity_note,
+                     sprint_weeks=args.sprint_weeks, sprint_anchor=sprint_anchor)
     if what_if:
         print("Режим what-if: план НЕ сохранён как базовый (plan_latest.json не обновлён).")
     else:
         shutil.copyfile(json_path, LATEST_PLAN)
 
-    print(console_summary(result, source.describe()))
+    print(console_summary(result, capacity_note))
     print(f"\nОтчёт:  {xlsx_path}")
     print(f"Гант:   {gantt_path}")
     print(f"План:   {json_path}")
@@ -294,6 +301,13 @@ def main(argv: list[str] | None = None) -> int:
     p_plan.add_argument("--capacity", choices=("mock", "onec", "file"), default="mock",
                         help="источник ёмкости: mock (по умолчанию), file (выгрузка 1С), onec (HTTP-сервис)")
     p_plan.add_argument("--capacity-file", help="путь к выгрузке 1С (для --capacity file)")
+    p_plan.add_argument("--reserve", type=float, default=RESERVE_DEFAULT,
+                        help="резерв ёмкости под влёты, доля 0..1 или %% (по умолчанию 0.25); "
+                             "0 — без резерва (когда заведён событиями в 1С)")
+    p_plan.add_argument("--sprint-weeks", type=int, default=2,
+                        help="длина спринта в неделях для сетки на Ганте (по умолчанию 2)")
+    p_plan.add_argument("--sprint-anchor",
+                        help="дата начала любого спринта YYYY-MM-DD (по умолчанию — дата плана)")
     p_plan.add_argument("--onec-url", default="http://localhost/sprinthelper/hs/planner",
                         help="базовый URL HTTP-сервиса 1С (для --capacity onec)")
     p_plan.add_argument("--baseline", help="plan_*.json для сравнения (по умолчанию plan_latest.json)")

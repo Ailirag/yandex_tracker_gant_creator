@@ -23,7 +23,7 @@ import httpx
 import openpyxl
 
 from .calendar_ru import is_workday
-from .config import RESERVE_COEFF_DEV, RESERVE_COEFF_SA, TEAMS
+from .config import TEAMS
 
 
 class CapacitySource(Protocol):
@@ -40,11 +40,11 @@ _DEV_GROUPS = {t.dev_group for t in TEAMS if t.dev_group}
 
 @dataclass
 class MockCapacity:
-    """Ёмкость = активная численность группы × резервный коэффициент.
+    """Ёмкость = активная численность группы (валовая, без резерва).
 
     Сотрудник учитывается, если не помечен «Исключить из ресурса» и период
     работы (ДатаНачалаРаботы/ДатаОкончанияРаботы) покрывает день. Отпуска мок
-    не видит — это осознанная погрешность до подключения HTTP-сервиса 1С.
+    не видит; резерв применяется в CapacityLedger, а не здесь.
     """
     headcount: dict[str, list[tuple[date | None, date | None]]]
 
@@ -100,17 +100,13 @@ class MockCapacity:
             if end and day > end:
                 continue
             active += 1
-        coeff = RESERVE_COEFF_SA if group in _SA_GROUPS else RESERVE_COEFF_DEV
-        return active * coeff
+        return float(active)
 
     def known_groups(self) -> set[str]:
         return {g for g in (_SA_GROUPS | _DEV_GROUPS) if self._match_group(g)}
 
     def describe(self) -> str:
-        return (
-            "МОК: численность групп из xlsx × резерв "
-            f"(Dev {RESERVE_COEFF_DEV:.0%}, СА {RESERVE_COEFF_SA:.0%}); отпуска не учтены"
-        )
+        return "МОК: активная численность групп из xlsx (валовая, отпуска не учтены)"
 
 
 # --- HTTP-сервис 1С ------------------------------------------------------
@@ -317,10 +313,15 @@ def _fnum(value) -> float:
 # --- Леджер остатков для раскладки ---------------------------------------
 
 class CapacityLedger:
-    """Изменяемые остатки ёмкости поверх источника (жадная раскладка)."""
+    """Изменяемые остатки ёмкости поверх источника (жадная раскладка).
 
-    def __init__(self, source: CapacitySource):
+    reserve — доля ёмкости, снимаемая с валовой доступности под влёты/поддержку
+    (0..1). Применяется единообразно ко всем источникам.
+    """
+
+    def __init__(self, source: CapacitySource, reserve: float = 0.0):
         self._source = source
+        self._reserve = max(0.0, min(1.0, reserve))
         self._used: dict[tuple[str, date], float] = {}
 
     def has_group(self, group: str) -> bool:
@@ -329,7 +330,7 @@ class CapacityLedger:
         return any(_norm_group(g) == norm for g in self._source.known_groups())
 
     def available(self, group: str, day: date) -> float:
-        base = self._source.fte(group, day)
+        base = self._source.fte(group, day) * (1.0 - self._reserve)
         return max(0.0, base - self._used.get((group, day), 0.0))
 
     def consume(self, group: str, day: date, fte: float) -> None:

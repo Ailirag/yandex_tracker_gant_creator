@@ -60,10 +60,13 @@ class ReleasePlan:
         for d in sys_plan.releases:
             if d >= not_before:
                 return d, False
-        # за пределами заполненного плана — еженедельная среда
+        # за пределами заполненного плана — еженедельный релиз (среда),
+        # пропуская дни моратория (фриза) системы, если они заданы
         d = not_before
         while d.weekday() != FALLBACK_RELEASE_WEEKDAY:
             d += timedelta(days=1)
+        while d in sys_plan.freeze_days:
+            d += timedelta(days=7)
         return d, True
 
 

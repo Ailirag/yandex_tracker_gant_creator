@@ -58,7 +58,8 @@ def _axis_range(result: PlanResult, plan_start: date) -> tuple[date, date]:
     return plan_start, date_to
 
 
-def write_gantt_html(result: PlanResult, out_path, plan_start: date, capacity_note: str) -> None:
+def write_gantt_html(result: PlanResult, out_path, plan_start: date, capacity_note: str,
+                     sprint_weeks: int = 2, sprint_anchor: date | None = None) -> None:
     date_from, date_to = _axis_range(result, plan_start)
     date_from -= timedelta(days=date_from.weekday())          # к понедельнику
     total_days = (date_to - date_from).days + 3
@@ -140,6 +141,21 @@ def write_gantt_html(result: PlanResult, out_path, plan_start: date, capacity_no
     today_x = x(plan_start)
     planned_n = len(result.planned)
 
+    # границы спринтов: каждые sprint_weeks недель от якоря (как задан)
+    sprint_js = "[]"
+    if sprint_weeks and sprint_weeks > 0:
+        anchor = sprint_anchor or plan_start
+        step = timedelta(weeks=sprint_weeks)
+        while anchor > date_from:
+            anchor -= step
+        ticks = []
+        d = anchor
+        while d <= date_to:
+            if d >= date_from:
+                ticks.append(f'{{x:{x(d)},lab:"{d.strftime("%d.%m")}"}}')
+            d += step
+        sprint_js = "[" + ",".join(ticks) + "]"
+
     doc = _TEMPLATE.format(
         total_px=total_px,
         label_w=LABEL_W,
@@ -151,6 +167,7 @@ def write_gantt_html(result: PlanResult, out_path, plan_start: date, capacity_no
         axis=axis,
         rows="".join(rows_html),
         today_x=today_x,
+        sprint_js=sprint_js,
         planned_n=planned_n,
         date_from=date_from.isoformat(),
         date_to=date_to.isoformat(),
@@ -225,6 +242,8 @@ _TEMPLATE = """<!doctype html>
   .mark.dl.breach {{ border-left:2px solid #E45756; }}
   .today {{ position:absolute; top:0; width:0; border-left:2px solid #E45756; z-index:1; opacity:.55; }}
   .today-lab {{ position:absolute; top:0; transform:translateX(-50%); font-size:10px; color:#E45756; background:#fff; padding:0 3px; }}
+  .sprintline {{ position:absolute; top:0; width:0; border-left:1px dashed #9fb3cc; z-index:1; opacity:.7; }}
+  .sprintlab {{ position:absolute; top:0; font-size:10px; color:#6f86a6; background:#fafafa; padding:0 3px; }}
   #tip {{ position:fixed; z-index:20; max-width:420px; background:#222; color:#fff; padding:8px 10px; border-radius:6px;
           font-size:12px; white-space:pre-line; pointer-events:none; display:none; box-shadow:0 4px 14px rgba(0,0,0,.3); }}
 </style></head><body>
@@ -247,9 +266,19 @@ _TEMPLATE = """<!doctype html>
 <div id="tip"></div>
 <script>
   var g = document.getElementById('gantt');
+  var H = g.scrollHeight;
+  // границы спринтов на всю высоту контента
+  var SPRINTS = {sprint_js};
+  SPRINTS.forEach(function(s){{
+    var sl = document.createElement('div'); sl.className='sprintline';
+    sl.style.left = ({label_w} + s.x) + 'px'; sl.style.height = H + 'px';
+    var slab = document.createElement('div'); slab.className='sprintlab';
+    slab.textContent = s.lab; slab.style.left = ({label_w} + s.x + 2) + 'px';
+    g.appendChild(sl); g.appendChild(slab);
+  }});
   // линия «сегодня» на всю высоту контента
   var line = document.createElement('div'); line.className='today';
-  line.style.left = ({label_w} + {today_x}) + 'px'; line.style.height = g.scrollHeight + 'px';
+  line.style.left = ({label_w} + {today_x}) + 'px'; line.style.height = H + 'px';
   var lab = document.createElement('div'); lab.className='today-lab'; lab.textContent='сегодня';
   lab.style.left = ({label_w} + {today_x}) + 'px';
   g.appendChild(line); g.appendChild(lab);
